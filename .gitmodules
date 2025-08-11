@@ -1,3 +1,4 @@
 [submodule "spoonos"]
 	path = spoonos
 	url = https://github.com/xspoonai/spoon-core
+	branch = main
