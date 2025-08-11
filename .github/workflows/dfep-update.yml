@@ -2,8 +2,10 @@ name: DFEP Update on Release
 on:
   release:
     types: [published]
+  workflow_dispatch: {}
 permissions:
   contents: write
+  pull-requests: write
 jobs:
   update-dfep:
     runs-on: ubuntu-latest
@@ -19,39 +21,32 @@ jobs:
         env:
           GITHUB_EVENT_PATH: ${{ github.event_path }}
         run: |
-          ASSET_URL=$(jq -r '.release.assets[] | select(.name | test("eos-bundle.*\.zip$")) | .browser_download_url' "$GITHUB_EVENT_PATH")
-          if [ -z "$ASSET_URL" ] || [ "$ASSET_URL" = "null" ]; then
-            echo "No matching bundle asset found." >&2
-            exit 1
-          fi
+          ASSET_URL=$(jq -r '.release.assets[]? | select(.name | test("eos-bundle.*\.zip$")) | .browser_download_url' "$GITHUB_EVENT_PATH" || true)
           echo "ASSET_URL=$ASSET_URL" >> $GITHUB_ENV
-      - name: Download bundle asset
+      - name: Download bundle asset (if present)
+        if: ${{ env.ASSET_URL != '' && env.ASSET_URL != 'null' }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           curl -L -H "Authorization: Bearer $GH_TOKEN" -o bundle.zip "$ASSET_URL"
-          sha256sum bundle.zip | tee bundle.sha256
-          SHA=$(cut -d' ' -f1 bundle.sha256)
-          echo "SHA256=$SHA" >> $GITHUB_ENV
+          echo "SHA256=$(sha256sum bundle.zip | cut -d' ' -f1)" >> $GITHUB_ENV
       - name: Update DFEP JSON
         run: |
           NOW=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-          jq --arg now "$NOW" --arg sha "$SHA256" \
-            '.fetched_at=$now | .bundle_sha256=$sha' \
+          jq --arg now "$NOW" --arg sha "${SHA256:-}" \
+            '.fetched_at=$now | (if $sha != "" then .bundle_sha256=$sha else . end)' \
             spoonos/benchmarks/latest.json > /tmp/latest.json
           mv /tmp/latest.json spoonos/benchmarks/latest.json
-      - name: Commit & push
-        env:
-          GIT_AUTHOR_NAME: github-actions
-          GIT_AUTHOR_EMAIL: 41898282+github-actions[bot]@users.noreply.github.com
-          GIT_COMMITTER_NAME: github-actions
-          GIT_COMMITTER_EMAIL: 41898282+github-actions[bot]@users.noreply.github.com
-        run: |
-          git checkout spoonos
-          git add spoonos/benchmarks/latest.json
-          if git diff --cached --quiet; then
-            echo "No DFEP changes to commit."
-            exit 0
-          fi
-          git commit -m "DFEP: update bundle_sha256 to $SHA256"
-          git push origin spoonos
+      - name: Create Pull Request
+        uses: peter-evans/create-pull-request@v6
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          commit-message: "DFEP: update benchmarks/latest.json${{ env.SHA256 != '' && format(' (sha256 {0})', env.SHA256) || '' }}"
+          title: "DFEP: update benchmarks/latest.json"
+          body: "Automated DFEP refresh.
+
+- SHA256: `${{ env.SHA256 }}`"
+          branch: ci/dfep-update-${{ github.run_id }}
+          base: spoonos
+          add-paths: |
+            spoonos/benchmarks/latest.json
