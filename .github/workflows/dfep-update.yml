@@ -15,14 +15,17 @@ jobs:
         with:
           submodules: recursive
           fetch-depth: 0
+
       - name: Install jq
         run: sudo apt-get update -y && sudo apt-get install -y jq
+
       - name: Determine asset URL
         env:
           GITHUB_EVENT_PATH: ${{ github.event_path }}
         run: |
           ASSET_URL=$(jq -r '.release.assets[]? | select(.name | test("eos-bundle.*\.zip$")) | .browser_download_url' "$GITHUB_EVENT_PATH" || true)
           echo "ASSET_URL=$ASSET_URL" >> $GITHUB_ENV
+
       - name: Download bundle asset (if present)
         if: ${{ env.ASSET_URL != '' && env.ASSET_URL != 'null' }}
         env:
@@ -30,6 +33,7 @@ jobs:
         run: |
           curl -L -H "Authorization: Bearer $GH_TOKEN" -o bundle.zip "$ASSET_URL"
           echo "SHA256=$(sha256sum bundle.zip | cut -d' ' -f1)" >> $GITHUB_ENV
+
       - name: Update DFEP JSON
         run: |
           NOW=$(date -u +%Y-%m-%dT%H:%M:%SZ)
@@ -37,15 +41,17 @@ jobs:
             '.fetched_at=$now | (if $sha != "" then .bundle_sha256=$sha else . end)' \
             spoonos/benchmarks/latest.json > /tmp/latest.json
           mv /tmp/latest.json spoonos/benchmarks/latest.json
+
       - name: Create Pull Request
         uses: peter-evans/create-pull-request@v6
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           commit-message: "DFEP: update benchmarks/latest.json${{ env.SHA256 != '' && format(' (sha256 {0})', env.SHA256) || '' }}"
           title: "DFEP: update benchmarks/latest.json"
-          body: "Automated DFEP refresh.
+          body: |
+            Automated DFEP refresh.
 
-- SHA256: `${{ env.SHA256 }}`"
+            - SHA256: `${{ env.SHA256 }}`
           branch: ci/dfep-update-${{ github.run_id }}
           base: spoonos
           add-paths: |
